@@ -1216,6 +1216,46 @@ class ResizeBilinearOperationParser : public TFLiteOperationParser {
     return OkStatus();
   }
 };
+class ResizeNearestOperationParser : public TFLiteOperationParser {
+public:
+    Status IsSupported(const TfLiteContext* context,
+                       const TfLiteNode* tflite_node,
+                       const TfLiteRegistration* registration) final {
+        RETURN_IF_ERROR(CheckMaxSupportedOpVersion(registration, 1));
+        RETURN_IF_ERROR(
+                CheckInputsOutputs(context, tflite_node, /*inputs=*/1, /*outputs=*/1));
+
+        // TODO(eignasheva): check shapes.
+        TfLiteResizeNearestNeighborParams* tf_options = nullptr;
+        RETURN_IF_ERROR(RetrieveBuiltinData(tflite_node, &tf_options));
+        return OkStatus();
+    }
+    Status Parse(const TfLiteNode* tflite_node,
+                 const TfLiteRegistration* registration, GraphFloat32* graph,
+                 ObjectReader* reader) final {
+        Node* node = graph->NewNode();
+        node->operation.type = ToString(OperationType::UPSAMPLE_2D);
+        RETURN_IF_ERROR(reader->AddInput(node, 0));
+        RETURN_IF_ERROR(reader->AddOutputs(node));
+        // Here we may have extra inputs. Other tensors were supposed to
+        // define new shape, but in TFLite these are ignored.
+
+        const auto* tf_options =
+                reinterpret_cast<const TfLiteResizeNearestNeighborParams*>(
+                        tflite_node->builtin_data);
+        if (!tf_options) {
+            return InternalError("Missing tflite params");
+        }
+        Upsample2DAttributes attr;
+        attr.align_corners = tf_options->align_corners;
+        attr.type = UpsamplingType::NEAREST;
+        attr.new_shape.CopyAllDefinedAxis(
+                graph->FindOutputs(node->id)[0]->tensor.shape);
+        node->operation.attributes = attr;
+        return OkStatus();
+    }
+};
+
 
 class PadOperationParser : public TFLiteOperationParser {
  public:
@@ -1921,6 +1961,8 @@ std::unique_ptr<TFLiteOperationParser> NewOperationParser(
       return make_unique<ReshapeOperationParser>();
     case kTfLiteBuiltinResizeBilinear:
       return make_unique<ResizeBilinearOperationParser>();
+    case kTfLiteBuiltinResizeNearestNeighbor:
+      return make_unique<ResizeNearestOperationParser>();
     case kTfLiteBuiltinRsqrt:
       return make_unique<ElementwiseOperationParser>(OperationType::RSQRT);
     case kTfLiteBuiltinSin:

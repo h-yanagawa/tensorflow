@@ -31,55 +31,57 @@ namespace gl {
 namespace {
 
 class UpsamplingBilinear : public NodeShader {
- public:
-  UpsamplingBilinear() {}
+public:
+    UpsamplingBilinear() {}
 
-  Status GenerateCode(const GenerationContext& ctx,
-                      GeneratedCode* generated_code) const final {
-    auto input = ctx.graph->FindInputs(ctx.node->id)[0];
-    auto output = ctx.graph->FindOutputs(ctx.node->id)[0];
-    auto attr =
-        absl::any_cast<Upsample2DAttributes>(ctx.node->operation.attributes);
+    Status GenerateCode(const GenerationContext& ctx,
+                        GeneratedCode* generated_code) const final {
+        auto input = ctx.graph->FindInputs(ctx.node->id)[0];
+        auto output = ctx.graph->FindOutputs(ctx.node->id)[0];
+        auto attr =
+                absl::any_cast<Upsample2DAttributes>(ctx.node->operation.attributes);
 
-    if (input->tensor.shape.w > output->tensor.shape.w ||
-        input->tensor.shape.h > output->tensor.shape.h) {
-      return InvalidArgumentError("Output size is less than input size.");
-    }
-    if (output->tensor.shape.w != attr.new_shape.w ||
-        output->tensor.shape.h != attr.new_shape.h) {
-      return InvalidArgumentError(
-          "Output size does not match new_size in attributes.");
-    }
-    if (input->tensor.shape.c != output->tensor.shape.c) {
-      return InvalidArgumentError("Input/output channels mismatch.");
-    }
-    if (attr.type != UpsamplingType::BILINEAR) {
-      return UnimplementedError("Upsample2D supports only bilinear type.");
-    }
-    if (input->tensor.shape.h == 1 && input->tensor.shape.w == 1) {
-      // Copy a single element from input.
-      *generated_code = {
-          /*parameters=*/{},
-          /*objects=*/{},
-          /*workload=*/uint3(),
-          /*workgroup=*/uint3(),
-          /*source_code=*/"value_0 = $input_data_0[0, 0, gid.z]$;",
-          /*input=*/IOStructure::ONLY_DEFINITIONS,
-          /*output=*/IOStructure::AUTO,
-      };
-      return OkStatus();
-    }
-    std::vector<UniformParameter> parameters = {
-        {"input_data_0_h", input->tensor.shape.h},
-        {"input_data_0_w", input->tensor.shape.w},
-        {"scale_factor",
-         float2(CalculateResizeScale(input->tensor.shape.w,
-                                     output->tensor.shape.w, attr),
-                CalculateResizeScale(input->tensor.shape.h,
-                                     output->tensor.shape.h, attr))},
-    };
+        if (input->tensor.shape.w > output->tensor.shape.w ||
+            input->tensor.shape.h > output->tensor.shape.h) {
+            return InvalidArgumentError("Output size is less than input size.");
+        }
+        if (output->tensor.shape.w != attr.new_shape.w ||
+            output->tensor.shape.h != attr.new_shape.h) {
+            return InvalidArgumentError(
+                    "Output size does not match new_size in attributes.");
+        }
+        if (input->tensor.shape.c != output->tensor.shape.c) {
+            return InvalidArgumentError("Input/output channels mismatch.");
+        }
 
-    std::string source = R"(
+        if (input->tensor.shape.h == 1 && input->tensor.shape.w == 1) {
+            // Copy a single element from input.
+            *generated_code = {
+                    /*parameters=*/{},
+                    /*objects=*/{},
+                    /*workload=*/uint3(),
+                    /*workgroup=*/uint3(),
+                    /*source_code=*/"value_0 = $input_data_0[0, 0, gid.z]$;",
+                    /*input=*/IOStructure::ONLY_DEFINITIONS,
+                    /*output=*/IOStructure::AUTO,
+            };
+            return OkStatus();
+        }
+        std::vector<UniformParameter> parameters = {
+                {"input_data_0_h", input->tensor.shape.h},
+                {"input_data_0_w", input->tensor.shape.w},
+                {"scale_factor",
+                                   float2(CalculateResizeScale(input->tensor.shape.w,
+                                                               output->tensor.shape.w, attr),
+                                          CalculateResizeScale(input->tensor.shape.h,
+                                                               output->tensor.shape.h, attr))},
+        };
+
+
+        std::string source;
+
+        if (attr.type != UpsamplingType::BILINEAR) {
+            source = R"(
   vec2 coord = vec2(gid.xy) * $scale_factor$;
 
   ivec2 borders = ivec2($input_data_0_w$, $input_data_0_h$) - ivec2(1, 1);
@@ -96,23 +98,31 @@ class UpsamplingBilinear : public NodeShader {
 
   value_0 = mix(mix(tex11, tex21, t.x), mix(tex12, tex22, t.x), t.y);
 )";
-    *generated_code = {
-        /*parameters=*/std::move(parameters),
-        /*objects=*/{},
-        /*workload=*/uint3(),
-        /*workgroup=*/uint3(),
-        /*source_code=*/std::move(source),
-        /*input=*/IOStructure::ONLY_DEFINITIONS,
-        /*output=*/IOStructure::AUTO,
-    };
-    return OkStatus();
-  }
+        } else if (attr.type == UpsamplingType::NEAREST) {
+            source = R"(
+  ivec2 coord = ivec2(vec2(gid.xy) * $scale_factor$);
+  value_0 = $input_data_0[coord.x, coord.y]$;
+)";
+        } else {
+            return UnimplementedError("Upsample2D supports only bilinear or nearest type.");
+        }
+        *generated_code = {
+                /*parameters=*/std::move(parameters),
+                /*objects=*/{},
+                /*workload=*/uint3(),
+                /*workgroup=*/uint3(),
+                /*source_code=*/std::move(source),
+                /*input=*/IOStructure::ONLY_DEFINITIONS,
+                /*output=*/IOStructure::AUTO,
+        };
+        return OkStatus();
+    }
 };
 
 }  // namespace
 
 std::unique_ptr<NodeShader> NewUpsamplingNodeShader() {
-  return absl::make_unique<UpsamplingBilinear>();
+    return absl::make_unique<UpsamplingBilinear>();
 }
 
 }  // namespace gl
